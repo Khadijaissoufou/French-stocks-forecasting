@@ -1,0 +1,17 @@
+# Script principal pour reproduire toute l'analyse
+cat("=== Démarrage de l'analyse ===\n")
+
+# 1. Installer les packages si nécessaire
+source("code/requirements.R")
+
+# 2. Exécuter l'analyse complète
+source("code/analysis_financial.R")
+
+# 3. Sauvegarder les outputs
+cat("\n=== Sauvegarde des résultats ===\n")
+
+# Créer les dossiers si inexistants
+dir.create("outputs/figures", showWarnings = FALSE, recursive = TRUE)
+dir.create("outputs/tables", showWarnings = FALSE, recursive = TRUE)
+
+cat("Analyse terminée ! Consultez le dossier 'outputs/' pour les résultats.\n")
