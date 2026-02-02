@@ -1,0 +1,27 @@
+ÉTUDE DE CAS : MODÉLISATION ET PRÉVISION DES RENDEMENTS
+Analyse comparative de LVMH, TotalEnergies et BNP Paribas (2019-2024)
+
+AUTEURS : Khadija Mahamadou Issoufou & Mohamed Anis Moudir
+MASTER 2 ÉCONOMÉTRIE APPLIQUÉE - Université de Lille
+Encadré par : M. Michael BREI
+Date : Décembre 2025
+
+RÉSUMÉ
+Cette étude analyse la performance et la prévisibilité de trois valeurs du CAC 40
+(LVMH, TotalEnergies, BNP Paribas) sur la période 2019-2024. Nous évaluons la
+robustesse du modèle CAPM, mesurons l'impact de la crise COVID-19 sur les bêtas,
+et comparons la performance prédictive de modèles dynamiques (ARMA, GARCH).
+
+PRINCIPAUX RÉSULTATS :
+1. LVMH présente le meilleur ratio de Sharpe (0.54) et devient défensif pendant COVID
+2. TotalEnergies offre la meilleure diversification (corrélation 0.42 avec LVMH)
+3. Les modèles CAPM+COVID réduisent l'erreur de prévision de 25-50% vs. benchmark naïf
+4. Les bêtas varient significativement pendant la crise, remettant en question leur stabilité
+
+MÉTHODOLOGIE :
+- Données : Yahoo Finance (2019-2024, 1,535 observations journalières)
+- Modèles : CAPM standard, CAPM+COVID, ARMA, GARCH-M
+- Validation : Split 2019-2023 (train) / 2024 (test)
+- Métriques : RMSE, R² out-of-sample, taux de bonne direction
+
+CODE : Reproduisible en R - voir dossier 'code/'
