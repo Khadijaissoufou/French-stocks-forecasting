@@ -1,0 +1,1991 @@
+#1##################################################################
+#install.packages("quantmod") #package qui permet de retirer directement les données de yahoo
+library(quantmod)
+#install.packages("tseries") #utile pour les tests sur les séries temporelles
+library(tseries)
+#install.packages("lmtest")
+library(lmtest)
+#install.packages("FinTS")
+library(FinTS)
+#install.packages("sandwich")
+library(sandwich)
+#install.packages("lmtest")
+library(lmtest)
+#install.packages("forecast")
+library(forecast)
+#install.packages("dplyr")
+library(dplyr)
+#install.packages("lubridate")
+library(lubridate)
+#install.packages("ggplot2")
+library(ggplot2)
+#install.packages("tidyr")
+library(tidyr)
+#install.packages("rugarch")
+library(rugarch)
+
+# Les tickers Yahoo Finance des actions choisies
+tickers <- c("MC.PA", "TTE.PA", "BNP.PA")
+tickers
+
+#importation des données
+getSymbols(
+  Symbols     = tickers,          # les tickers
+  src         = "yahoo",          # source des données
+  from        = "2019-01-01",     # date de début
+  auto.assign = TRUE              # crée un objet par ticker
+)
+
+# Aperçu des premières lignes de LVMH
+head(MC.PA)
+
+# Extraction des prix de clôture ajustés de chaque action
+lvmh_adj  <- Ad(MC.PA)
+total_adj <- Ad(TTE.PA)
+bnp_adj   <- Ad(BNP.PA)
+
+head(lvmh_adj)
+
+# Fusionner les trois séries dans un seul objet
+prices_adj <- merge(lvmh_adj, total_adj, bnp_adj)
+
+# Renommer les colonnes avec des noms plus lisibles
+colnames(prices_adj) <- c("LVMH", "TotalEnergies", "BNP_Paribas")
+
+head(prices_adj)
+
+#2###################################################
+
+# 1) Définir la date de fin = aujourd'hui
+end_date <- Sys.Date()
+
+# 2) Définir la date de début = 28 jours avant
+start_date <- end_date - 28
+
+start_date
+end_date
+
+# Construire une chaîne de caractères "YYYY-MM-DD/YYYY-MM-DD"
+date_range <- paste0(start_date, "/", end_date)
+date_range
+
+# Extraire LVMH sur les 4 dernières semaines
+lvmh_4w <- MC.PA[date_range]
+
+# Extraire TotalEnergies sur les 4 dernières semaines
+tte_4w  <- TTE.PA[date_range]
+
+# Vérifier rapidement
+head(lvmh_4w)
+tail(lvmh_4w)
+
+head(tte_4w)
+tail(tte_4w)
+
+#a) Graphique pour LVMH
+chartSeries(lvmh_4w,
+            type = "candlesticks",          # chandeliers japonais
+            name = "LVMH (MC.PA) - 4 dernières semaines",
+            theme = chartTheme("white"))    # thème visuel plus clair
+
+#b) Graphique pour TotalEnergies
+chartSeries(tte_4w,
+            type = "candlesticks",
+            name = "TotalEnergies (TTE.PA) - 4 dernières semaines",
+            theme = chartTheme("white"))
+
+#3##################################################
+
+##1.Calculer les rendements journaliers
+
+# Calcul des rendements logarithmiques journaliers
+log_returns <- diff(log(prices_adj))
+
+##2.Analyse descriptive : moyenne et volatilité
+
+# La première ligne devient NA (car pas de jour précédent) → on l’enlève
+log_returns <- na.omit(log_returns)
+
+head(log_returns)
+
+# Moyenne journalière des log-rendements
+mean_daily <- apply(log_returns, 2, mean)
+mean_daily
+
+# Volatilité journalière (écart-type des log-rendements)
+sd_daily <- apply(log_returns, 2, sd)
+sd_daily
+
+##2.3. Annualiser moyenne et volatilité
+
+trading_days <- 252
+
+# Moyenne annuelle (à partir des log-rendements)
+mean_annual <- exp(mean_daily * trading_days) - 1
+
+# Volatilité annuelle
+sd_annual <- sd_daily * sqrt(trading_days)
+
+# Mettre tout dans un tableau lisible
+descriptive_stats <- data.frame(
+  Moyenne_journaliere = mean_daily,
+  Volatilite_journaliere = sd_daily,
+  Moyenne_annuelle = mean_annual,
+  Volatilite_annuelle = sd_annual
+)
+
+round(descriptive_stats, 4)
+
+##3.Représenter les rendements et rendements au carré
+
+log_returns_sq <- log_returns^2
+head(log_returns_sq)
+
+# On met deux graphiques l'un sous l'autre
+
+# 1) Rendements journaliers de LVMH
+par(mfrow = c(2, 1))
+
+plot(log_returns$LVMH,
+     main = "Rendements journaliers - LVMH",
+     xlab = "Date",
+     ylab = "Rendement (log)")
+
+# 2) Rendements au carré de LVMH
+plot(log_returns_sq$LVMH,
+     main = "Rendements au carré - LVMH",
+     xlab = "Date",
+     ylab = "Rendement^2")
+
+# TotalEnergies
+par(mfrow = c(2, 1))
+plot(log_returns$TotalEnergies,
+     main = "Rendements journaliers - TotalEnergies",
+     xlab = "Date",
+     ylab = "Rendement (log)")
+
+plot(log_returns_sq$TotalEnergies,
+     main = "Rendements au carré - TotalEnergies",
+     xlab = "Date",
+     ylab = "Rendement^2")
+
+# BNP Paribas
+par(mfrow = c(2, 1))
+plot(log_returns$BNP_Paribas,
+     main = "Rendements journaliers - BNP Paribas",
+     xlab = "Date",
+     ylab = "Rendement (log)")
+
+plot(log_returns_sq$BNP_Paribas,
+     main = "Rendements au carré - BNP Paribas",
+     xlab = "Date",
+     ylab = "Rendement^2")
+
+##4.Tester la saisonnalité mensuelle et trimestrielle
+# On extrait LVMH
+lvmh_ret <- log_returns$LVMH
+
+# Construire un data.frame avec date et rendement
+lvmh_df <- data.frame(
+  date = index(lvmh_ret),
+  ret  = as.numeric(lvmh_ret)
+)
+
+# Création des variables saisonnières
+lvmh_df$month   <- factor(format(lvmh_df$date, "%m"))   # "01", "02", ..., "12"
+lvmh_df$quarter <- factor(quarters(lvmh_df$date))       # "Q1", "Q2", "Q3", "Q4"
+
+head(lvmh_df)
+
+#Test de saisonnalité mensuelle (LVMH)
+# Modèle linéaire : rendement ~ mois
+model_month_lvmh <- lm(ret ~ month, data = lvmh_df)
+
+# ANOVA : test global de saisonnalité
+anova(model_month_lvmh)
+
+#Test de saisonnalité trimestrielle (LVMH)
+model_quarter_lvmh <- lm(ret ~ quarter, data = lvmh_df)
+anova(model_quarter_lvmh)
+
+#on fait pareil avec total et bnp
+test_seasonality <- function(one_return_series) {
+  df <- data.frame(
+    date = index(one_return_series),
+    ret  = as.numeric(one_return_series)
+  )
+  df$month   <- factor(format(df$date, "%m"))
+  df$quarter <- factor(quarters(df$date))
+  
+  cat("=== Saisonnalité mensuelle ===\n")
+  print(anova(lm(ret ~ month, data = df)))
+  
+  cat("\n=== Saisonnalité trimestrielle ===\n")
+  print(anova(lm(ret ~ quarter, data = df)))
+}
+
+# Tests
+test_seasonality(log_returns$LVMH)
+test_seasonality(log_returns$TotalEnergies)
+test_seasonality(log_returns$BNP_Paribas)
+
+##5. Rendement cumulatif sur toute la période
+# Somme des log-rendements = log du facteur de croissance
+cum_log_ret <- apply(log_returns, 2, sum)
+
+# Rendement cumulatif depuis 2019-01-01
+cum_return <- exp(cum_log_ret) - 1
+
+cum_return
+round(cum_return, 3)
+
+##6. Rendement annuel moyen
+mean_annual <- exp(mean_daily * trading_days) - 1
+round(mean_annual, 3)
+
+#4.#######################################################
+
+#Stationnarité 
+
+##1. Stationnarité des prix cloture
+
+##Analyse visuelle
+
+# Prix de clôture ajustés pour LVMH
+lvmh_price <- prices_adj$LVMH
+
+plot(lvmh_price,
+     main = "Prix de clôture ajustés - LVMH",
+     xlab = "Date",
+     ylab = "Prix")
+
+#Prix de clôture ajustés pour TotalEnergies
+plot(prices_adj$TotalEnergies, main = "Prix - TotalEnergies")
+
+#Prix de clôture ajustés pour BNP Parisbas
+plot(prices_adj$BNP_Paribas,    main = "Prix - BNP Paribas")
+
+##Test Dickey-Fuller
+adf.test(lvmh_price)
+#H0 : la série a une racine unitaire elle est non stationnaire
+#H1 : la série est stationnaire
+#La p-value est très élevée (0.6518) cela veut dire que nous avons
+#beaucoup de chances de nous tromper en rejetant l'hypothèse H0
+#de non stationnarité. Nous considérons donc que le série est non stationnaire
+
+#pour les autres indices
+adf.test(prices_adj$TotalEnergies)
+#non stationnaire
+adf.test(prices_adj$BNP_Paribas)
+#dépend du seuil, à 5% on pourrait rejeter H0 mais à 1% on pourrait garder 
+#l'hypothèse de non stationnarité. C'est peu mais pas c'est explicable par
+#le fait que notre periode d'observation soit trop courte
+
+##2. Stationnarité des rendements journaliers
+
+lvmh_ret <- log_returns$LVMH
+
+plot(lvmh_ret,
+     main = "Rendements journaliers (log) - LVMH",
+     xlab = "Date",
+     ylab = "Rendement")
+
+plot(log_returns$TotalEnergies,
+     main = "Rendements journaliers (log) - TotalEnergies")
+
+plot(log_returns$BNP_Paribas,
+     main = "Rendements journaliers (log) - BNP Paribas")
+
+adf.test(lvmh_ret)
+adf.test(log_returns$TotalEnergies)
+adf.test(log_returns$BNP_Paribas)
+
+#Toutes les p-values sont petites, nous pouvons rejeter
+#l'hypothèse de non stationnarité pour les 3 séries de rendements.
+
+#5########################################################
+
+# Matrice de corrélation des rendements journaliers
+corr_matrix <- cor(log_returns)
+
+corr_matrix
+
+round(corr_matrix, 3)
+
+#Connaitre la correlation des rendements des actifs entre
+#eux, permet aux financier de mieux diversifier son portefeuille
+#et donc de réduire son risque.
+#(il ne met pas ses oeufs dans le même panier)
+#s'il y a un choc sur le marché financier qui ferait perdre
+#de la valeurs à un actif du portefeuil, il y a de
+#forte chances que les actifs qui lui sont corrélés en perdent également
+#il y a moins de chance que cela arrive aux actifs non corrélés
+#à ces derniers puisqu'ils sont vraissemblablement régit pas des
+#determinants différents. Ainsi, un investisseurs possédant des 
+#actifs variés non corrélés se protège du risque de voir tous ses 
+#actifs perdre de la valuer d'un coup. 
+
+#6.########################################################
+
+#1. Télécharger l’indice de marché (CAC 40) et son rendement
+
+# Télécharger le CAC 40, pour les stocker 
+cac40_prices <- getSymbols("^FCHI",
+                           src = "yahoo",
+                           from = "2019-01-01",
+                           auto.assign = FALSE)
+
+# Regarder les premières lignes
+head(cac40_prices)
+
+#1.2. Calculer le rendement journalier du CAC 40
+# Prix de clôture ajusté du CAC 40
+cac40_adj <- Ad(cac40_prices)
+
+# Rendements journaliers (logarithmiques)
+cac40_ret <- diff(log(cac40_adj))
+cac40_ret <- na.omit(cac40_ret)
+
+# Renommer la colonne
+colnames(cac40_ret) <- "CAC40"
+
+#2.2. Ajouter une colonne "date" et "année"
+
+#Transformer en data.frame et ajouter l’année (2019–2024)
+returns_df <- data.frame(
+  date = index(merge(log_returns, cac40_ret, join = "inner")),
+  coredata(merge(log_returns, cac40_ret, join = "inner"))
+)
+# Ajouter l'année comme variable
+returns_df$year <- as.numeric(format(returns_df$date, "%Y"))
+
+head(returns_df)
+
+#3. Restreindre la période à 2019–2024
+
+returns_1924 <- subset(returns_df, year >= 2019 & year <= 2024)
+
+# Vérifier
+range(returns_1924$date)
+
+
+# Graphiques en annexe 
+
+
+
+# Charger les packages nécessaires si ce n'est pas déjà fait
+if (!require(reshape2)) install.packages("reshape2")
+library(reshape2)
+
+#  Préparation des données pour les graphiques
+
+# Convertir returns_1924 en objet xts 
+returns_xts <- xts(returns_1924[, c("LVMH", "TotalEnergies", "BNP_Paribas", "CAC40")], 
+                   order.by = returns_1924$date)
+
+# Calcul des rendements en pourcentage 
+rendements_journaliers_pourcentage <- returns_xts * 100
+
+
+
+#  Calcul des performances cumulées en base 100 (100€ investis le 2 janvier 2019)
+rendements_cumules_journaliers <- exp(cumsum(rendements_journaliers_pourcentage/100)) * 100
+
+#  Conversion en mensuel : dernier jour de chaque mois
+rendements_cumules_mensuels <- suppressWarnings(
+  to.monthly(rendements_cumules_journaliers, indexAt = "last", OHLC = FALSE)
+)
+
+# Préparation du dataframe pour ggplot
+rendements_cumules_df <- data.frame(
+  Date = index(rendements_cumules_mensuels),
+  as.data.frame(rendements_cumules_mensuels)
+) %>%
+  pivot_longer(cols = -Date, names_to = "Action", values_to = "Valeur") %>%
+  mutate(Action_Explicite = case_when(
+    Action == "LVMH" ~ "LVMH (Luxe)",
+    Action == "TotalEnergies" ~ "TotalEnergies (Énergie)",
+    Action == "BNP_Paribas" ~ "BNP Paribas (Banque)",
+    Action == "CAC40" ~ "CAC 40 (Marché)"
+  ))
+
+
+valeurs_finales <- rendements_cumules_df %>%
+  group_by(Action_Explicite) %>%
+  summarize(Valeur_finale = last(Valeur)) %>%
+  arrange(desc(Valeur_finale))
+ordre_legendes <- valeurs_finales$Action_Explicite
+rendements_cumules_df$Action_Explicite <- factor(rendements_cumules_df$Action_Explicite, levels = ordre_legendes)
+
+
+couleurs_actions <- c(
+  "LVMH (Luxe)" = "#1f77b4",
+  "BNP Paribas (Banque)" = "#2ca02c",
+  "TotalEnergies (Énergie)" = "#ff7f0e",
+  "CAC 40 (Marché)" = "#d62728"
+)
+
+# Labels 
+labels_fin <- rendements_cumules_df %>%
+  group_by(Action_Explicite) %>%
+  filter(Date == max(Date)) %>%
+  mutate(
+    nudge_y = case_when(
+      Action_Explicite == "LVMH (Luxe)" ~ 0,
+      Action_Explicite == "BNP Paribas (Banque)" ~ 0,
+      Action_Explicite == "TotalEnergies (Énergie)" ~ 5,
+      Action_Explicite == "CAC 40 (Marché)" ~ -5
+    )
+  )
+
+#  Graphique performance cumulée
+g_performance_cumulee <- ggplot(rendements_cumules_df, aes(x = Date, y = Valeur, color = Action_Explicite)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 1.5) +
+  geom_hline(yintercept = 100, linetype = "solid", color = "black", linewidth = 0.8) +
+  geom_point(data = labels_fin, size = 6, shape = 19) +
+  geom_label(data = labels_fin, aes(label = paste0(round(Valeur,0), " €"), y = Valeur + nudge_y),
+             nudge_x = 50, size = 5, fontface = "bold", fill = "white", linewidth = 0.3, show.legend = FALSE) +
+  scale_color_manual(values = couleurs_actions, name = "ACTIFS") +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y", expand = expansion(mult = c(0.02, 0.1))) +
+  scale_y_continuous(breaks = seq(50, 300, by = 50), labels = function(x) paste0(x, "€")) +
+  labs(title = "PERFORMANCE CUMULÉE DES INVESTISSEMENTS : 2019-2024",
+       subtitle = "Évolution de 100€ investis le 2 janvier 2019 dans chaque actif (points = fin de chaque mois)",
+       x = "Date (dernier jour de chaque mois)", y = "Valeur de l'investissement (en euros)",
+       caption = "Données : Yahoo Finance | Rendements journaliers logarithmiques cumulés") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray40", size = 12),
+        axis.title = element_text(face = "bold"),
+        axis.text = element_text(color = "gray30"),
+        legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.text = element_text(size = 10),
+        panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+        panel.grid.minor = element_blank())
+
+# Afficher le graphique
+print(g_performance_cumulee)
+
+#  Matrice de corrélation (identique à avant)
+
+matrice_cor <- cor(rendements_journaliers_pourcentage, use = "complete.obs")
+noms_actifs <- c("LVMH", "TotalEnergies", "BNP Paribas", "CAC 40")
+colnames(matrice_cor) <- rownames(matrice_cor) <- noms_actifs
+matrice_cor_melt <- melt(matrice_cor)
+
+g_correlation <- ggplot(matrice_cor_melt, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = sprintf("%.2f", value)), color = "black", size = 4.5, fontface = "bold") +
+  scale_fill_gradient(low = "#E3F2FD", high = "#1565C0", name = "Coefficient de\ncorrélation") +
+  labs(title = "MATRICE DE CORRÉLATION : ANALYSE DES DÉPENDANCES ENTRE ACTIFS",
+       subtitle = "Relations linéaires entre rendements journaliers (2019-2024)",
+       caption = "Source : Yahoo Finance | Rendements logarithmiques") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(size = 11, hjust = 0.5),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 11, face = "bold"),
+        axis.text.y = element_text(size = 11, face = "bold"),
+        axis.title = element_blank(),
+        legend.position = "right")
+
+print(g_correlation)
+
+#  Distribution des rendements journaliers
+
+rendements_long <- data.frame(
+  Date = index(rendements_journaliers_pourcentage),
+  coredata(rendements_journaliers_pourcentage)
+) %>%
+  pivot_longer(cols = -Date, names_to = "Action", values_to = "Rendement") %>%
+  mutate(Action_Explicite = case_when(
+    Action == "LVMH" ~ "LVMH (Luxe)",
+    Action == "TotalEnergies" ~ "TotalEnergies (Énergie)",
+    Action == "BNP_Paribas" ~ "BNP Paribas (Banque)",
+    Action == "CAC40" ~ "CAC 40 (Marché)"
+  ))
+
+# Histogrammes
+g_histogram <- ggplot(rendements_long, aes(x = Rendement, fill = Action_Explicite)) +
+  geom_histogram(bins = 50, alpha = 0.7, position = "identity", color = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  facet_wrap(~Action_Explicite, ncol = 2, scales = "free") +
+  scale_fill_manual(values = couleurs_actions) +
+  labs(title = "Distribution des rendements journaliers (2019-2024)", 
+       x = "Rendement (%)", 
+       y = "Fréquence") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none")
+
+print(g_histogram)
+
+#  Volatilité glissante 30 jours
+# Définir les dates COVID 
+covid_start <- as.Date("2020-01-01")
+covid_end   <- as.Date("2021-12-31")
+
+vol_glissante <- rendements_long %>%
+  group_by(Action_Explicite) %>%
+  arrange(Date) %>%
+  mutate(Vol30 = rollapply(Rendement, width = 30, FUN = sd, fill = NA, align = "right"))
+
+# Utiliser les dates COVID  
+g_volatility <- ggplot(vol_glissante, aes(x = Date, y = Vol30, color = Action_Explicite)) +
+  geom_rect(aes(xmin = covid_start, xmax = covid_end, ymin = -Inf, ymax = Inf),
+            fill = "lightpink", alpha = 0.1, inherit.aes = FALSE) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = couleurs_actions) +
+  labs(title = "Volatilité glissante 30 jours des rendements", 
+       x = "Date", 
+       y = "Volatilité (%)") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+print(g_volatility)
+
+#  Boxplot par période
+
+rendements_long <- rendements_long %>%
+  mutate(Periode = factor(case_when(
+    Date < covid_start ~ "Pré-COVID (2019)",
+    Date >= covid_start & Date <= covid_end ~ "COVID (2020-2021)",
+    TRUE ~ "Post-COVID (2022-2024)"
+  ), levels = c("Pré-COVID (2019)", "COVID (2020-2021)", "Post-COVID (2022-2024)")))
+
+g_boxplot <- ggplot(rendements_long, aes(x = Periode, y = abs(Rendement), fill = Action_Explicite)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 1) +
+  facet_wrap(~Action_Explicite, ncol = 2, scales = "free_y") +
+  scale_fill_manual(values = couleurs_actions) +
+  labs(title = "Évolution de la volatilité absolue par période", 
+       x = "Période", 
+       y = "Rendement absolu (%)") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none")
+
+print(g_boxplot)
+
+
+
+#4. Estimation des betas
+
+#4.1. Bêta de LVMH
+# Régression : rendement LVMH expliqué par rendement CAC40
+model_LVMH <- lm(LVMH ~ CAC40, data = returns_1924)
+summary(model_LVMH)
+
+#4.2. Bêta de TotalEnergies
+model_Total <- lm(TotalEnergies ~ CAC40, data = returns_1924)
+summary(model_Total)
+
+#4.3. Bêta de BNP Paribas
+model_BNP <- lm(BNP_Paribas ~ CAC40, data = returns_1924)
+summary(model_BNP)
+
+#On récupère tous ces bêta dans un tableau
+betas <- c(
+  LVMH          = coef(model_LVMH)["CAC40"],
+  TotalEnergies = coef(model_Total)["CAC40"],
+  BNP_Paribas   = coef(model_BNP)["CAC40"]
+)
+
+betas
+
+#LVMH.CAC40 TotalEnergies.CAC40   BNP_Paribas.CAC40 
+#1.197599            1.052257            1.338267 
+
+#Des trois actions, BNP_parisbas et LVMH semble être plus volatile
+#chaque changement dans la valuer du marché est suivie
+#d'un changement plus important des l'actions. 
+#ainsi Un bêta supérieur à 1 traduit un titre plus 
+#“agressif” que le marché (plus risqué), tandis qu’un bêta 
+#inférieur à 1 correspond à un titre plus défensif.
+
+#6 Modèle avec bêtas qui varient d’une année à l’autre
+
+#6.1. Boucle sur les années pour une action (ex : LVMH)
+years <- 2019:2024
+
+compute_betas_by_year <- function(ret_var_name, data, years) {
+  betas <- numeric(length(years))
+  names(betas) <- years
+  for (i in seq_along(years)) {
+    y <- years[i]
+    data_y <- subset(data, year == y)
+    formula_y <- as.formula(paste(ret_var_name, "~ CAC40"))
+    model_y <- lm(formula_y, data = data_y)
+    betas[i] <- coef(model_y)["CAC40"]
+  }
+  return(betas)
+}
+
+betas_LVMH_year  <- compute_betas_by_year("LVMH",          returns_1924, years)
+betas_Total_year <- compute_betas_by_year("TotalEnergies", returns_1924, years)
+betas_BNP_year   <- compute_betas_by_year("BNP_Paribas",   returns_1924, years)
+
+betas_LVMH_year
+betas_Total_year
+betas_BNP_year
+
+#Comment le bêta de LVMH a évolué 
+plot(years, betas_LVMH_year, type = "b",
+     main = "Évolution du bêta de LVMH par année",
+     xlab = "Année", ylab = "Bêta")
+
+#Comment le bêta de Total a évolué 
+plot(years, betas_Total_year, type = "b",
+     main = "Évolution du bêta de Total par année",
+     xlab = "Année", ylab = "Bêta")
+
+#Comment le bêta de BNP a évolué 
+plot(years, betas_BNP_year, type = "b",
+     main = "Évolution du bêta de BNP par année",
+     xlab = "Année", ylab = "Bêta")
+
+#nous pouvons voir des pics dans la volatilité
+#de total ainsi que de bnp pendant l'année 2020 (année 
+#du confinement lié au covid19. Mais ce pas le cas 
+#pour LVMH qui semble enregistrer une dynamique inverse 
+#sur toute la periode. 
+
+#7###############################################
+
+#1. Récupérer et représenter les résidus
+
+#récupération des résidus
+res_LVMH <- residuals(model_LVMH)
+head(res_LVMH)
+
+res_BNP <- residuals(model_BNP)
+head(res_BNP)
+
+res_Total <- residuals(model_Total)
+head(res_Total)
+
+#on les intégre dans un data frame
+res_df_LVMH <- data.frame(
+  date = returns_1924$date,
+  res  = res_LVMH
+)
+
+head(res_df_LVMH)
+
+#on trace le graph des résidus dans le temps
+plot(res_df_LVMH$date, res_df_LVMH$res, type = "l",
+     main = "Résidus du modèle CAPM homogène - LVMH",
+     xlab = "Date", ylab = "Résidu")
+abline(h = 0, col = "red")
+
+#2.Test d’autocorrélation des résidus
+
+#ACF
+acf(res_LVMH, main = "ACF des résidus - LVMH")
+acf(res_BNP, main = "ACF des résidus - BNP")
+acf(res_Total, main = "ACF des résidus - Total")
+
+#Test Ljung Box
+Box.test(res_LVMH, lag = 10, type = "Ljung-Box")
+Box.test(res_BNP, lag = 10, type = "Ljung-Box")
+Box.test(res_Total, lag = 10, type = "Ljung-Box")
+
+#p-value = 0.05907 nous pourrions rejeter l'hypothèse H0 de 
+#l'autocorrélation des résidus. Mais nous somme en zone grise.
+#au seuil de 10%, elle ne serait pas rejeté. 
+
+#On tente avec le test Durbin-Watson
+dwtest(model_LVMH)
+dwtest(model_Total)
+dwtest(model_BNP)
+
+#autocorrélation présente avec p value en dessous d'un seuil de 10%
+
+#3. Tester l’hétéroscédasticité (ARCH / volatilité conditionnelle)
+
+#visuel
+par(mfrow = c(1, 1))
+plot(res_df_LVMH$date, res_df_LVMH$res^2, type = "l",
+     main = "Résidus au carré - LVMH",
+     xlab = "Date", ylab = "Résidu^2")
+
+#Test ARCH (Lagrange Multiplier)
+ArchTest(res_LVMH, lags = 10)
+ArchTest(res_Total, lags = 10)
+ArchTest(res_BNP, lags = 10)
+
+#H0 :pas d’effet ARCH (variance constante)
+#p-value à 0.2552 donc non rejet de l'hypothèse H0
+#pas d'effet ARCH donc.
+
+#pas de pb pour LVMH mais pb avec Total et BNP (hétéroscédasticité
+# + autocorrélation)
+
+#Les coefficients alpha et beta estimés par lm() restent 
+#corrects, mais les erreurs-types classiques sont fausses
+
+#Il faut corriger avec erreurs-types robustes (White / Newey-West)
+
+# 1) Erreurs-types robustes à l'hétéroscédasticité (White)
+coeftest(model_LVMH,  vcov = vcovHC(model_LVMH,  type = "HC"))
+coeftest(model_Total, vcov = vcovHC(model_Total, type = "HC"))
+coeftest(model_BNP,   vcov = vcovHC(model_BNP,   type = "HC"))
+
+# 2) erreurs-types HAC (Newey-West),
+#robustes à la fois à l'hétéroscédasticité ET à l'autocorrélation
+coeftest(model_LVMH,  vcov = NeweyWest(model_LVMH))
+coeftest(model_Total, vcov = NeweyWest(model_Total))
+coeftest(model_BNP,   vcov = NeweyWest(model_BNP))
+
+#8###############################################
+
+covid_start <- as.Date("2020-01-01")
+covid_end   <- as.Date("2021-12-31")
+
+# Variable muette Covid : 1 pendant la crise, 0 sinon
+returns_1924$covid <- ifelse(
+  returns_1924$date >= covid_start & returns_1924$date <= covid_end,
+  1, 0
+)
+table(returns_1924$covid)
+
+# Modèle CAPM + dummy Covid pour LVMH
+model_LVMH_covid_level <- lm(LVMH ~ CAC40 + covid, data = returns_1924)
+summary(model_LVMH_covid_level)
+
+model_Total_covid_level <- lm(TotalEnergies ~ CAC40 + covid, data = returns_1924)
+summary(model_Total_covid_level)
+
+model_BNP_covid_level <- lm(BNP_Paribas ~ CAC40 + covid, data = returns_1924)
+summary(model_BNP_covid_level)
+
+# Modèle avec interaction : CAC40 * covid = CAC40 + covid + CAC40:covid
+model_LVMH_covid_full <- lm(LVMH ~ CAC40 * covid, data = returns_1924)
+summary(model_LVMH_covid_full)
+
+model_Total_covid_full <- lm(TotalEnergies ~ CAC40 * covid, data = returns_1924)
+summary(model_Total_covid_full)
+
+model_BNP_covid_full <- lm(BNP_Paribas ~ CAC40 * covid, data = returns_1924)
+summary(model_BNP_covid_full)
+
+coeftest(model_LVMH_covid_full,  vcov = NeweyWest(model_LVMH_covid_full))
+coeftest(model_Total_covid_full, vcov = NeweyWest(model_Total_covid_full))
+coeftest(model_BNP_covid_full,   vcov = NeweyWest(model_BNP_covid_full))
+
+#hors crise, LVMH est plus risquée que le marché : si le 
+#CAC 40 bouge de 1 %, LVMH bouge en moyenne de 1,39 % dans 
+#le même sens.
+
+#pendant Covid, la sensibilité de LVMH au marché baisse
+#fortement (0,95 au lieu de 1,39) : le titre devient plus 
+#“défensif” relativement au marché.
+
+#crise, TotalEnergies est moins sensible que le marché 
+#(bêta < 1).
+
+#pendant la crise, le bêta passe au-dessus de 1 : l’action 
+#devient plus sensible que le marché → plus “agressive” 
+#pendant l’épisode Covid.
+
+#déjà hors crise, BNP est plus risquée que le marché (bêta > 1).
+
+#pendant Covid, cette sensibilité au marché augmente 
+#encore : le titre devient encore plus cyclique, 
+#très réactif aux mouvements du CAC 40.
+
+#9#####################################################
+
+# LVMH_{t-1}
+returns_1924$LVMH_lag1 <- c(NA, head(returns_1924$LVMH, -1))
+
+# TotalEnergies_{t-1}
+returns_1924$Total_lag1 <- c(NA, head(returns_1924$TotalEnergies, -1))
+
+# BNP_{t-1}
+returns_1924$BNP_lag1 <- c(NA, head(returns_1924$BNP_Paribas, -1))
+
+# On enlève la première ligne qui a des NA sur les lags
+returns_AR1 <- subset(returns_1924,
+                      !is.na(LVMH_lag1) &
+                        !is.na(Total_lag1) &
+                        !is.na(BNP_lag1))
+
+#LVMH AR(1)
+model_LVMH_AR1 <- lm(LVMH ~ CAC40 + LVMH_lag1, data = returns_AR1)
+summary(model_LVMH_AR1)
+
+res_LVMH_AR1 <- residuals(model_LVMH_AR1)
+Box.test(res_LVMH_AR1, lag = 10, type = "Ljung-Box")
+
+#Total AR(1)
+model_Total_AR1 <- lm(TotalEnergies ~ CAC40 + Total_lag1, data = returns_AR1)
+summary(model_Total_AR1)
+
+res_Total_AR1 <- residuals(model_Total_AR1)
+Box.test(res_Total_AR1, lag = 10, type = "Ljung-Box")
+
+#BNP AR(1)
+model_BNP_AR1 <- lm(BNP_Paribas ~ CAC40 + BNP_lag1, data = returns_AR1)
+summary(model_BNP_AR1)
+
+res_BNP_AR1 <- residuals(model_BNP_AR1)
+Box.test(res_BNP_AR1, lag = 10, type = "Ljung-Box")
+
+#Erreurs type robuste
+coeftest(model_LVMH_AR1,  vcov = NeweyWest(model_LVMH_AR1))
+coeftest(model_Total_AR1, vcov = NeweyWest(model_Total_AR1))
+coeftest(model_BNP_AR1,   vcov = NeweyWest(model_BNP_AR1))
+
+#10###################################################
+
+#Methode 1
+
+# Quelques ARMA candidats sur les résidus
+arma_00 <- arima(res_LVMH, order = c(0, 0, 0))  # juste bruit blanc
+arma_10 <- arima(res_LVMH, order = c(1, 0, 0))  # AR(1)
+arma_01 <- arima(res_LVMH, order = c(0, 0, 1))  # MA(1)
+arma_11 <- arima(res_LVMH, order = c(1, 0, 1))  # ARMA(1,1)
+arma_20 <- arima(res_LVMH, order = c(2, 0, 0))
+arma_02 <- arima(res_LVMH, order = c(0, 0, 2))
+arma_22 <- arima(res_LVMH, order = c(2, 0, 2))
+
+AIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+BIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+
+# Quelques ARMA candidats sur les résidus
+arma_00 <- arima(res_BNP, order = c(0, 0, 0))  # juste bruit blanc
+arma_10 <- arima(res_BNP, order = c(1, 0, 0))  # AR(1)
+arma_01 <- arima(res_BNP, order = c(0, 0, 1))  # MA(1)
+arma_11 <- arima(res_BNP, order = c(1, 0, 1))  # ARMA(1,1)
+arma_20 <- arima(res_BNP, order = c(2, 0, 0))
+arma_02 <- arima(res_BNP, order = c(0, 0, 2))
+arma_22 <- arima(res_BNP, order = c(2, 0, 2))
+
+AIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+BIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+
+# Quelques ARMA candidats sur les résidus
+arma_00 <- arima(res_Total, order = c(0, 0, 0))  # juste bruit blanc
+arma_10 <- arima(res_Total, order = c(1, 0, 0))  # AR(1)
+arma_01 <- arima(res_Total, order = c(0, 0, 1))  # MA(1)
+arma_11 <- arima(res_Total, order = c(1, 0, 1))  # ARMA(1,1)
+arma_20 <- arima(res_Total, order = c(2, 0, 0))
+arma_02 <- arima(res_Total, order = c(0, 0, 2))
+arma_22 <- arima(res_Total, order = c(2, 0, 2))
+
+AIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+BIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+
+#Avec les modèles d'interaction covid
+
+res_bnp_covid <- residuals(model_BNP_covid_full)
+res_total_covid <- residuals(model_Total_covid_full)
+res_lvmh_covid <- residuals(model_LVMH_covid_full)
+
+# Quelques ARMA candidats sur les résidus
+#BNP
+arma_00 <- arima(res_bnp_covid, order = c(0, 0, 0))  # juste bruit blanc
+arma_10 <- arima(res_bnp_covid, order = c(1, 0, 0))  # AR(1)
+arma_01 <- arima(res_bnp_covid, order = c(0, 0, 1))  # MA(1)
+arma_11 <- arima(res_bnp_covid, order = c(1, 0, 1))  # ARMA(1,1)
+arma_20 <- arima(res_bnp_covid, order = c(2, 0, 0))
+arma_02 <- arima(res_bnp_covid, order = c(0, 0, 2))
+arma_22 <- arima(res_bnp_covid, order = c(2, 0, 2))
+
+AIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+BIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+
+# Quelques ARMA candidats sur les résidus
+#LVMH
+arma_00 <- arima(res_lvmh_covid, order = c(0, 0, 0))  # juste bruit blanc
+arma_10 <- arima(res_lvmh_covid, order = c(1, 0, 0))  # AR(1)
+arma_01 <- arima(res_lvmh_covid, order = c(0, 0, 1))  # MA(1)
+arma_11 <- arima(res_lvmh_covid, order = c(1, 0, 1))  # ARMA(1,1)
+arma_20 <- arima(res_lvmh_covid, order = c(2, 0, 0))
+arma_02 <- arima(res_lvmh_covid, order = c(0, 0, 2))
+arma_22 <- arima(res_lvmh_covid, order = c(2, 0, 2))
+
+AIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+BIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+
+#TOTAL
+arma_00 <- arima(res_total_covid, order = c(0, 0, 0))  # juste bruit blanc
+arma_10 <- arima(res_total_covid, order = c(1, 0, 0))  # AR(1)
+arma_01 <- arima(res_total_covid, order = c(0, 0, 1))  # MA(1)
+arma_11 <- arima(res_total_covid, order = c(1, 0, 1))  # ARMA(1,1)
+arma_20 <- arima(res_total_covid, order = c(2, 0, 0))
+arma_02 <- arima(res_total_covid, order = c(0, 0, 2))
+arma_22 <- arima(res_total_covid, order = c(2, 0, 2))
+
+AIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+BIC(arma_00, arma_10, arma_01, arma_11, arma_20, arma_02, arma_22)
+
+#Méthode 2
+
+# Série dépendante : rendement BNP
+y_bnp   <- returns_1924$BNP_Paribas
+
+# Variable explicative : CAC40
+x_cac   <- returns_1924$CAC40
+
+# auto.arima avec xreg = CAC40, pas de saisonnalité
+model_BNP_ARMA <- auto.arima(y_bnp,
+                             xreg = x_cac,
+                             seasonal = FALSE,
+                             max.p = 3, max.q = 3)
+
+model_BNP_ARMA
+
+checkresiduals(model_BNP_ARMA)
+
+model_LVMH_ARMA  <- auto.arima(returns_1924$LVMH,          xreg = x_cac, seasonal = FALSE)
+model_Total_ARMA <- auto.arima(returns_1924$TotalEnergies, xreg = x_cac, seasonal = FALSE)
+
+model_LVMH_ARMA
+model_Total_ARMA
+
+#Pour LVMH et TotalEnergies, le modèle “le plus adéquat” au 
+#sens de l’AIC est en fait juste le CAPM : il n’y a pas 
+#besoin de termes ARMA dans les erreurs.
+
+#Les résidus, une fois le marché pris en compte, se comportent
+#comme un bruit blanc : pas de dynamique temporelle 
+#exploitable en plus du marché.
+
+#Pour BNP : Il reste une très faible persistance dans les rendements 
+#de BNP après avoir contrôlé le marché : un choc aujourd’hui 
+#a un tout petit effet sur demain via 𝜙≈ 0,065
+
+#Mais cet effet est numériquement petit ; l’essentiel de 
+#la variation est toujours expliqué par le CAC 40 
+#(bêta ≈ 1,34).
+
+#11######################################################
+
+#création des échantillon de test et d'entrainement
+# Échantillon d'estimation : 2019–2023
+train <- subset(returns_1924, year >= 2019 & year <= 2023)
+
+# Échantillon de prévision : 2024
+test  <- subset(returns_1924, year == 2024)
+
+# Vérifier les dates
+range(train$date)
+range(test$date)
+
+# Rendements des actions (train)
+y_LVMH_train   <- train$LVMH
+y_Total_train  <- train$TotalEnergies
+y_BNP_train    <- train$BNP_Paribas
+
+# Rendement du marché (train)
+x_CAC_train    <- train$CAC40
+
+# Rendements des actions (test, pour 2024)
+y_LVMH_test    <- test$LVMH
+y_Total_test   <- test$TotalEnergies
+y_BNP_test     <- test$BNP_Paribas
+
+# Rendement du marché (test, pour 2024)
+x_CAC_test     <- test$CAC40
+
+#Réestimation des modèles sur les échantillon train
+
+# LVMH : auto.arima sur 2019–2023 avec CAC40 en régression
+model_LVMH_1923 <- auto.arima(y_LVMH_train,
+                              xreg     = x_CAC_train,
+                              seasonal = FALSE,
+                              max.p    = 3, max.q = 3)
+
+model_LVMH_1923
+
+# TotalEnergies
+model_Total_1923 <- auto.arima(y_Total_train,
+                               xreg     = x_CAC_train,
+                               seasonal = FALSE,
+                               max.p    = 3, max.q = 3)
+
+model_Total_1923
+
+# BNP Paribas
+model_BNP_1923 <- auto.arima(y_BNP_train,
+                              xreg     = x_CAC_train,
+                              seasonal = FALSE,
+                              max.p    = 3, max.q = 3)
+
+model_BNP_1923
+
+#prédiction
+
+#LVMH
+# Nombre de jours à prévoir (taille de 2024)
+h_LVMH <- length(y_LVMH_test)
+
+# Prévision pour 2024
+fc_LVMH <- forecast(model_LVMH_1923,
+                    xreg = x_CAC_test,
+                    h    = h_LVMH)
+
+# Prévisions (moyenne)
+pred_LVMH <- as.numeric(fc_LVMH$mean)
+
+# Rendements réalisés
+real_LVMH <- y_LVMH_test
+
+#BNP PARISBAS
+h_BNP <- length(y_BNP_test)
+
+fc_BNP <- forecast(model_BNP_1923,
+                   xreg = x_CAC_test,
+                   h    = h_BNP)
+
+pred_BNP <- as.numeric(fc_BNP$mean)
+real_BNP <- y_BNP_test
+
+#TOTAL
+h_Total <- length(y_Total_test)
+
+fc_Total <- forecast(model_Total_1923,
+                     xreg = x_CAC_test,
+                     h    = h_Total)
+
+pred_Total <- as.numeric(fc_Total$mean)
+real_Total <- y_Total_test
+
+#Evaluation
+eval_forecast <- function(real, pred) {
+  errors <- real - pred
+  
+  MSE  <- mean(errors^2, na.rm = TRUE)
+  RMSE <- sqrt(MSE)
+  MAE  <- mean(abs(errors), na.rm = TRUE)
+  
+  # R² prévisionnel (pseudo R² out-of-sample)
+  RSS  <- sum(errors^2, na.rm = TRUE)
+  TSS  <- sum((real - mean(real, na.rm = TRUE))^2, na.rm = TRUE)
+  R2   <- 1 - RSS / TSS
+  
+  # "Hit rate" : pourcentage de bons signes prédits
+  hit  <- mean(sign(real) == sign(pred), na.rm = TRUE)
+  
+  # Benchmark naïf : prédire 0 tous les jours
+  pred_naive <- rep(0, length(real))
+  MSE_naive  <- mean((real - pred_naive)^2, na.rm = TRUE)
+  
+  data.frame(
+    MSE      = MSE,
+    RMSE     = RMSE,
+    MAE      = MAE,
+    R2_out   = R2,
+    Hit_rate = hit,
+    MSE_naif = MSE_naive
+  )
+}
+
+perf_LVMH  <- eval_forecast(real_LVMH,  pred_LVMH)
+perf_Total <- eval_forecast(real_Total, pred_Total)
+perf_BNP   <- eval_forecast(real_BNP,   pred_BNP)
+
+perf_LVMH
+perf_Total
+perf_BNP
+
+
+covid_start <- as.Date("2020-01-01")
+covid_end   <- as.Date("2021-12-31")
+
+returns_1924$covid <- ifelse(
+  returns_1924$date >= covid_start & returns_1924$date <= covid_end,
+  1, 0
+)
+
+train <- subset(returns_1924, year >= 2019 & year <= 2023)
+test  <- subset(returns_1924, year == 2024)
+
+y_LVMH_train   <- train$LVMH
+y_Total_train  <- train$TotalEnergies
+y_BNP_train    <- train$BNP_Paribas
+
+x_CAC_train    <- train$CAC40
+
+y_LVMH_test    <- test$LVMH
+y_Total_test   <- test$TotalEnergies
+y_BNP_test     <- test$BNP_Paribas
+
+x_CAC_test     <- test$CAC40
+
+X_train_covid <- cbind(
+  CAC40        = x_CAC_train,
+  covid        = train$covid,
+  CAC40_covid  = x_CAC_train * train$covid
+)
+
+X_test_covid <- cbind(
+  CAC40        = x_CAC_test,
+  covid        = test$covid,
+  CAC40_covid  = x_CAC_test * test$covid
+)
+
+model_LVMH_cov_ARMA <- auto.arima(
+  y_LVMH_train,
+  xreg     = X_train_covid,
+  seasonal = FALSE,
+  max.p    = 3,
+  max.q    = 3
+)
+model_LVMH_cov_ARMA
+
+model_Total_cov_ARMA <- auto.arima(
+  y_Total_train,
+  xreg     = X_train_covid,
+  seasonal = FALSE,
+  max.p    = 3,
+  max.q    = 3
+)
+model_Total_cov_ARMA
+
+model_BNP_cov_ARMA <- auto.arima(
+  y_BNP_train,
+  xreg     = X_train_covid,
+  seasonal = FALSE,
+  max.p    = 3,
+  max.q    = 3
+)
+model_BNP_cov_ARMA
+
+h_LVMH  <- length(y_LVMH_test)
+h_Total <- length(y_Total_test)
+h_BNP   <- length(y_BNP_test)
+
+fc_LVMH_cov <- forecast(
+  model_LVMH_cov_ARMA,
+  xreg = X_test_covid,
+  h    = h_LVMH
+)
+pred_LVMH_cov <- as.numeric(fc_LVMH_cov$mean)
+
+fc_Total_cov <- forecast(
+  model_Total_cov_ARMA,
+  xreg = X_test_covid,
+  h    = h_Total
+)
+pred_Total_cov <- as.numeric(fc_Total_cov$mean)
+
+fc_BNP_cov <- forecast(
+  model_BNP_cov_ARMA,
+  xreg = X_test_covid,
+  h    = h_BNP
+)
+pred_BNP_cov <- as.numeric(fc_BNP_cov$mean)
+
+X_train_nocov <- cbind(CAC40 = x_CAC_train)
+X_test_nocov  <- cbind(CAC40 = x_CAC_test)
+
+model_LVMH_nocov_ARMA <- auto.arima(
+  y_LVMH_train,
+  xreg     = X_train_nocov,
+  seasonal = FALSE,
+  max.p    = 3,
+  max.q    = 3
+)
+model_LVMH_nocov_ARMA
+
+model_Total_nocov_ARMA <- auto.arima(
+  y_Total_train,
+  xreg     = X_train_nocov,
+  seasonal = FALSE,
+  max.p    = 3,
+  max.q    = 3
+)
+model_Total_nocov_ARMA
+
+model_BNP_nocov_ARMA <- auto.arima(
+  y_BNP_train,
+  xreg     = X_train_nocov,
+  seasonal = FALSE,
+  max.p    = 3,
+  max.q    = 3
+)
+model_BNP_nocov_ARMA
+
+fc_LVMH_nocov <- forecast(
+  model_LVMH_nocov_ARMA,
+  xreg = X_test_nocov,
+  h    = h_LVMH
+)
+pred_LVMH_nocov <- as.numeric(fc_LVMH_nocov$mean)
+
+fc_Total_nocov <- forecast(
+  model_Total_nocov_ARMA,
+  xreg = X_test_nocov,
+  h    = h_Total
+)
+pred_Total_nocov <- as.numeric(fc_Total_nocov$mean)
+
+fc_BNP_nocov <- forecast(
+  model_BNP_nocov_ARMA,
+  xreg = X_test_nocov,
+  h    = h_BNP
+)
+pred_BNP_nocov <- as.numeric(fc_BNP_nocov$mean)
+
+eval_forecast <- function(real, pred) {
+  errors <- real - pred
+  
+  MSE  <- mean(errors^2, na.rm = TRUE)
+  RMSE <- sqrt(MSE)
+  MAE  <- mean(abs(errors), na.rm = TRUE)
+  
+  RSS  <- sum(errors^2, na.rm = TRUE)
+  TSS  <- sum((real - mean(real, na.rm = TRUE))^2, na.rm = TRUE)
+  R2   <- 1 - RSS / TSS
+  
+  hit  <- mean(sign(real) == sign(pred), na.rm = TRUE)
+  
+  pred_naive <- rep(0, length(real))
+  MSE_naive  <- mean((real - pred_naive)^2, na.rm = TRUE)
+  
+  data.frame(
+    MSE      = MSE,
+    RMSE     = RMSE,
+    MAE      = MAE,
+    R2_out   = R2,
+    Hit_rate = hit,
+    MSE_naif = MSE_naive
+  )
+}
+
+
+perf_LVMH_nocov <- eval_forecast(y_LVMH_test, pred_LVMH_nocov)
+perf_LVMH_cov   <- eval_forecast(y_LVMH_test, pred_LVMH_cov)
+
+rbind(
+  LVMH_nocov = perf_LVMH_nocov,
+  LVMH_cov   = perf_LVMH_cov
+)
+
+perf_Total_nocov <- eval_forecast(y_Total_test, pred_Total_nocov)
+perf_Total_cov   <- eval_forecast(y_Total_test, pred_Total_cov)
+
+rbind(
+  Total_nocov = perf_Total_nocov,
+  Total_cov   = perf_Total_cov
+)
+
+
+perf_BNP_nocov <- eval_forecast(y_BNP_test, pred_BNP_nocov)
+perf_BNP_cov   <- eval_forecast(y_BNP_test, pred_BNP_cov)
+
+rbind(
+  BNP_nocov = perf_BNP_nocov,
+  BNP_cov   = perf_BNP_cov
+)
+
+
+covid_start <- as.Date("2020-01-01")
+covid_end   <- as.Date("2021-12-31")
+
+returns_1924$covid <- ifelse(
+  returns_1924$date >= covid_start & returns_1924$date <= covid_end,
+  1, 0
+)
+
+train <- subset(returns_1924, year >= 2019 & year <= 2023)
+test  <- subset(returns_1924, year == 2024)
+
+y_LVMH_train <- train$LVMH
+y_LVMH_test  <- test$LVMH
+
+x_CAC_train <- train$CAC40
+x_CAC_test  <- test$CAC40
+
+
+X_train_covid <- cbind(
+  CAC40       = x_CAC_train,
+  covid       = train$covid,
+  CAC40_covid = x_CAC_train * train$covid
+)
+
+X_test_covid <- cbind(
+  CAC40       = x_CAC_test,
+  covid       = test$covid,
+  CAC40_covid = x_CAC_test * test$covid
+)
+
+X_train_nocov <- cbind(CAC40 = x_CAC_train)
+X_test_nocov  <- cbind(CAC40 = x_CAC_test)
+
+spec_LVMH_garchm_cov <- ugarchspec(
+  variance.model = list(
+    model = "sGARCH",
+    garchOrder = c(1, 1)
+  ),
+  mean.model = list(
+    armaOrder = c(0, 0),
+    include.mean = TRUE,
+    external.regressors = as.matrix(X_train_covid),
+    archm = TRUE,
+    archpow = 2
+  ),
+  distribution.model = "norm"
+)
+
+fit_LVMH_garchm_cov <- ugarchfit(
+  spec = spec_LVMH_garchm_cov,
+  data = y_LVMH_train,
+  solver = "hybrid"
+)
+
+show(fit_LVMH_garchm_cov)
+infocriteria(fit_LVMH_garchm_cov)
+
+spec_LVMH_garchm_nocov <- ugarchspec(
+  variance.model = list(
+    model = "sGARCH",
+    garchOrder = c(1, 1)
+  ),
+  mean.model = list(
+    armaOrder = c(0, 0),
+    include.mean = TRUE,
+    external.regressors = as.matrix(X_train_nocov),
+    archm = TRUE,
+    archpow = 2
+  ),
+  distribution.model = "norm"
+)
+
+fit_LVMH_garchm_nocov <- ugarchfit(
+  spec = spec_LVMH_garchm_nocov,
+  data = y_LVMH_train,
+  solver = "hybrid"
+)
+
+show(fit_LVMH_garchm_nocov)
+infocriteria(fit_LVMH_garchm_nocov)
+
+h_LVMH <- nrow(X_test_covid)
+
+fc_LVMH_garchm_cov <- ugarchforecast(
+  fit_LVMH_garchm_cov,
+  n.ahead = h_LVMH,
+  external.forecasts = list(
+    mregfor = as.matrix(X_test_covid)
+  )
+)
+
+pred_LVMH_garchm_cov <- as.numeric(fc_LVMH_garchm_cov@forecast$seriesFor)
+
+h_LVMH_nocov <- nrow(X_test_nocov)
+
+fc_LVMH_garchm_nocov <- ugarchforecast(
+  fit_LVMH_garchm_nocov,
+  n.ahead = h_LVMH_nocov,
+  external.forecasts = list(
+    mregfor = as.matrix(X_test_nocov)
+  )
+)
+
+pred_LVMH_garchm_nocov <- as.numeric(fc_LVMH_garchm_nocov@forecast$seriesFor)
+
+eval_forecast <- function(real, pred) {
+  errors <- real - pred
+  
+  MSE  <- mean(errors^2)
+  RMSE <- sqrt(MSE)
+  MAE  <- mean(abs(errors))
+  
+  RSS  <- sum(errors^2)
+  TSS  <- sum((real - mean(real))^2)
+  R2   <- 1 - RSS / TSS
+  
+  hit  <- mean(sign(real) == sign(pred))
+  
+  pred_naive <- rep(0, length(real))
+  MSE_naive  <- mean((real - pred_naive)^2)
+  
+  data.frame(
+    MSE      = MSE,
+    RMSE     = RMSE,
+    MAE      = MAE,
+    R2_out   = R2,
+    Hit_rate = hit,
+    MSE_naif = MSE_naive
+  )
+}
+
+perf_LVMH_garchm_cov   <- eval_forecast(y_LVMH_test, pred_LVMH_garchm_cov)
+perf_LVMH_garchm_nocov <- eval_forecast(y_LVMH_test, pred_LVMH_garchm_nocov)
+
+rbind(
+  GARCHM_nocov = perf_LVMH_garchm_nocov,
+  GARCHM_cov   = perf_LVMH_garchm_cov
+)
+
+perf_LVMH_ARMA_cov   <- eval_forecast(y_LVMH_test, pred_LVMH_cov)
+perf_LVMH_ARMA_nocov <- eval_forecast(y_LVMH_test, pred_LVMH_nocov)
+
+rbind(
+  ARMA_nocov   = perf_LVMH_ARMA_nocov,
+  ARMA_cov     = perf_LVMH_ARMA_cov,
+  GARCHM_nocov = perf_LVMH_garchm_nocov,
+  GARCHM_cov   = perf_LVMH_garchm_cov
+)
+
+
+
+returns_weekly <- returns_1924 %>%
+  arrange(date) %>%
+  mutate(
+    week_start = floor_date(date, unit = "week", week_start = 1),
+    year_week  = year(week_start)
+  ) %>%
+  group_by(week_start, year_week) %>%
+  summarise(
+    LVMH_weekly          = prod(1 + LVMH) - 1,
+    TotalEnergies_weekly = prod(1 + TotalEnergies) - 1,
+    BNP_Paribas_weekly   = prod(1 + BNP_Paribas) - 1,
+    CAC40_weekly         = prod(1 + CAC40) - 1,
+    .groups = "drop"
+  ) %>%
+  rename(
+    date = week_start,
+    year = year_week
+  ) %>%
+  arrange(date)
+
+head(returns_weekly)
+tail(returns_weekly)
+
+
+returns_weekly <- returns_weekly %>%
+  arrange(date)
+
+train <- returns_weekly %>%
+  filter(year >= 2019, year <= 2023)
+
+test  <- returns_weekly %>%
+  filter(year == 2024)
+
+train <- train %>%
+  mutate(LVMH_lag1 = dplyr::lag(LVMH_weekly, 1))
+
+train_model <- train %>%
+  filter(!is.na(LVMH_lag1))
+
+model_LVMH_AR <- lm(
+  LVMH_weekly ~ LVMH_lag1 + CAC40_weekly,
+  data = train_model
+)
+
+summary(model_LVMH_AR)
+
+
+last_LVMH_2023 <- train %>%
+  filter(!is.na(LVMH_weekly)) %>%
+  slice_tail(n = 1) %>%
+  pull(LVMH_weekly)
+
+n_test <- nrow(test)
+
+pred_LVMH_2024 <- rep(NA_real_, n_test)
+
+coef_hat <- coef(model_LVMH_AR)
+alpha  <- coef_hat["(Intercept)"]
+b_lag  <- coef_hat["LVMH_lag1"]
+b_cac  <- coef_hat["CAC40_weekly"]
+
+for (i in 1:n_test) {
+  
+  x_t <- test$CAC40_weekly[i]
+  
+  if (i == 1) {
+    r_lag <- last_LVMH_2023
+  } else {
+    r_lag <- pred_LVMH_2024[i - 1]
+  }
+  
+  pred_LVMH_2024[i] <- alpha + b_lag * r_lag + b_cac * x_t
+}
+
+results_2024 <- test %>%
+  mutate(
+    LVMH_pred_recursive = pred_LVMH_2024
+  )
+
+rmse_vec <- function(real, pred) {
+  sqrt(mean((real - pred)^2, na.rm = TRUE))
+}
+
+rmse_path <- data.frame(
+  week_index = 1:n_test,
+  RMSE_cum   = NA_real_
+)
+
+for (k in 1:n_test) {
+  real_k <- results_2024$LVMH_weekly[1:k]
+  pred_k <- results_2024$LVMH_pred_recursive[1:k]
+  rmse_path$RMSE_cum[k] <- rmse_vec(real_k, pred_k)
+}
+
+ggplot(rmse_path, aes(x = week_index, y = RMSE_cum)) +
+  geom_line() +
+  geom_point(size = 1) +
+  labs(
+    x = "Semaine de 2024 (horizon de prévision)",
+    y = "RMSE cumulatif",
+    title = "Évolution du RMSE des prévisions récursives – LVMH (hebdo)"
+  ) +
+  theme_minimal()
+
+ggplot(results_2024, aes(x = date)) +
+  geom_line(aes(y = LVMH_weekly,          colour = "Réel")) +
+  geom_line(aes(y = LVMH_pred_recursive, colour = "Prédiction dynamique (lag prédit)")) +
+  labs(
+    x = "Date (2024)",
+    y = "Rendement hebdomadaire",
+    title = "LVMH – Rendements réels vs prévisions récursives (2019–2023 → 2024)",
+    colour = ""
+  ) +
+  theme_minimal()
+
+ggplot(results_2024, aes(x = LVMH_weekly, y = LVMH_pred_recursive)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(
+    x = "Rendement réel",
+    y = "Rendement prédit (récursif)",
+    title = "LVMH – Qualité de la prévision hebdo en 2024"
+  ) +
+  theme_minimal()
+
+returns_weekly <- returns_weekly %>%
+  arrange(date) %>%
+  mutate(year = year(date))
+
+returns_weekly <- returns_weekly %>%
+  arrange(date) %>%
+  mutate(LVMH_lag1 = dplyr::lag(LVMH_weekly, 1))
+
+train_weekly <- returns_weekly %>%
+  filter(year >= 2019, year <= 2023, !is.na(LVMH_lag1))
+
+test_weekly  <- returns_weekly %>%
+  filter(year == 2024)
+
+model_LVMH_dyn <- lm(
+  LVMH_weekly ~ CAC40_weekly + LVMH_lag1,
+  data = train_weekly
+)
+
+summary(model_LVMH_dyn)
+
+
+returns_weekly <- returns_1924 %>%
+  arrange(date) %>%
+  mutate(
+    week_start = floor_date(date, unit = "week", week_start = 1),
+    year = year(week_start)
+  ) %>%
+  group_by(week_start, year) %>%
+  summarise(
+    LVMH_weekly  = prod(1 + LVMH)  - 1,
+    CAC40_weekly = prod(1 + CAC40) - 1,
+    .groups = "drop"
+  ) %>%
+  rename(date = week_start) %>%
+  arrange(date)
+
+fit_capm_lag_k <- function(k) {
+  data_k <- returns_weekly %>%
+    arrange(date) %>%
+    mutate(
+      CAC40_lag = dplyr::lag(CAC40_weekly, k)
+    )
+  
+  train_k <- data_k %>%
+    filter(year >= 2019, year <= 2023, !is.na(CAC40_lag))
+  
+  test_k <- data_k %>%
+    filter(year == 2024, !is.na(CAC40_lag))
+  
+  model_k <- lm(LVMH_weekly ~ CAC40_lag, data = train_k)
+  
+  pred_k <- predict(model_k, newdata = test_k)
+  real_k <- test_k$LVMH_weekly
+  
+  RMSE_k <- sqrt(mean((real_k - pred_k)^2))
+  
+  list(
+    lag   = k,
+    RMSE  = RMSE_k,
+    ntest = length(real_k),
+    model = model_k
+  )
+}
+
+
+
+returns_weekly <- returns_weekly %>%
+  arrange(date) %>%
+  mutate(
+    CAC40_lag1  = dplyr::lag(CAC40_weekly, 1),
+    CAC40_lag2  = dplyr::lag(CAC40_weekly, 2),
+    CAC40_lag3  = dplyr::lag(CAC40_weekly, 3),
+    CAC40_lag4  = dplyr::lag(CAC40_weekly, 4),
+    CAC40_lag5  = dplyr::lag(CAC40_weekly, 5),
+    CAC40_lag6  = dplyr::lag(CAC40_weekly, 6),
+    CAC40_lag7  = dplyr::lag(CAC40_weekly, 7),
+    CAC40_lag8  = dplyr::lag(CAC40_weekly, 8),
+    CAC40_lag9  = dplyr::lag(CAC40_weekly, 9),
+    CAC40_lag10 = dplyr::lag(CAC40_weekly, 10),
+    CAC40_lag11 = dplyr::lag(CAC40_weekly, 11),
+    CAC40_lag12 = dplyr::lag(CAC40_weekly, 12),
+    CAC40_lag13 = dplyr::lag(CAC40_weekly, 13),
+    CAC40_lag14 = dplyr::lag(CAC40_weekly, 14),
+    CAC40_lag15 = dplyr::lag(CAC40_weekly, 15),
+    CAC40_lag16 = dplyr::lag(CAC40_weekly, 16),
+    CAC40_lag17 = dplyr::lag(CAC40_weekly, 17),
+    CAC40_lag18 = dplyr::lag(CAC40_weekly, 18),
+    CAC40_lag19 = dplyr::lag(CAC40_weekly, 19),
+    CAC40_lag20 = dplyr::lag(CAC40_weekly, 20),
+    CAC40_lag21 = dplyr::lag(CAC40_weekly, 21),
+    CAC40_lag22 = dplyr::lag(CAC40_weekly, 22),
+    CAC40_lag23 = dplyr::lag(CAC40_weekly, 23),
+    CAC40_lag24 = dplyr::lag(CAC40_weekly, 24),
+    CAC40_lag25 = dplyr::lag(CAC40_weekly, 25),
+    CAC40_lag26 = dplyr::lag(CAC40_weekly, 26),
+    CAC40_lag27 = dplyr::lag(CAC40_weekly, 27),
+    CAC40_lag28 = dplyr::lag(CAC40_weekly, 28),
+    CAC40_lag29 = dplyr::lag(CAC40_weekly, 29),
+    CAC40_lag30 = dplyr::lag(CAC40_weekly, 30),
+    CAC40_lag31 = dplyr::lag(CAC40_weekly, 31),
+    CAC40_lag32 = dplyr::lag(CAC40_weekly, 32),
+    CAC40_lag33 = dplyr::lag(CAC40_weekly, 33),
+    CAC40_lag34 = dplyr::lag(CAC40_weekly, 34),
+    CAC40_lag35 = dplyr::lag(CAC40_weekly, 35),
+    CAC40_lag36 = dplyr::lag(CAC40_weekly, 36),
+    CAC40_lag37 = dplyr::lag(CAC40_weekly, 37),
+    CAC40_lag38 = dplyr::lag(CAC40_weekly, 38),
+    CAC40_lag39 = dplyr::lag(CAC40_weekly, 39),
+    CAC40_lag40 = dplyr::lag(CAC40_weekly, 40),
+    CAC40_lag41 = dplyr::lag(CAC40_weekly, 41),
+    CAC40_lag42 = dplyr::lag(CAC40_weekly, 42),
+    CAC40_lag43 = dplyr::lag(CAC40_weekly, 43),
+    CAC40_lag44 = dplyr::lag(CAC40_weekly, 44),
+    CAC40_lag45 = dplyr::lag(CAC40_weekly, 45),
+    CAC40_lag46 = dplyr::lag(CAC40_weekly, 46),
+    CAC40_lag47 = dplyr::lag(CAC40_weekly, 47),
+    CAC40_lag48 = dplyr::lag(CAC40_weekly, 48),
+    CAC40_lag49 = dplyr::lag(CAC40_weekly, 49),
+    CAC40_lag50 = dplyr::lag(CAC40_weekly, 50)
+  )
+
+data_all <- returns_weekly %>%
+  filter(
+    !is.na(LVMH_weekly),
+    !is.na(CAC40_lag50)
+  )
+
+
+model_lag1 <- lm(LVMH_weekly ~ CAC40_lag1, data = returns_weekly)
+summary(model_lag1)
+rmse_lag1 <- sqrt(mean(residuals(model_lag1)^2))
+
+model_lag2 <- lm(LVMH_weekly ~ CAC40_lag2, data = returns_weekly)
+summary(model_lag2)
+rmse_lag2 <- sqrt(mean(residuals(model_lag2)^2))
+
+model_lag3 <- lm(LVMH_weekly ~ CAC40_lag3, data = returns_weekly)
+summary(model_lag3)
+rmse_lag3 <- sqrt(mean(residuals(model_lag3)^2))
+
+model_lag4 <- lm(LVMH_weekly ~ CAC40_lag4, data = returns_weekly)
+summary(model_lag4)
+rmse_lag4 <- sqrt(mean(residuals(model_lag4)^2))
+
+model_lag5 <- lm(LVMH_weekly ~ CAC40_lag5, data = returns_weekly)
+summary(model_lag5)
+rmse_lag5 <- sqrt(mean(residuals(model_lag5)^2))
+
+model_lag6 <- lm(LVMH_weekly ~ CAC40_lag6, data = returns_weekly)
+summary(model_lag6)
+rmse_lag6 <- sqrt(mean(residuals(model_lag6)^2))
+
+model_lag7 <- lm(LVMH_weekly ~ CAC40_lag7, data = returns_weekly)
+summary(model_lag7)
+rmse_lag7 <- sqrt(mean(residuals(model_lag7)^2))
+
+model_lag8 <- lm(LVMH_weekly ~ CAC40_lag8, data = returns_weekly)
+summary(model_lag8)
+rmse_lag8 <- sqrt(mean(residuals(model_lag8)^2))
+
+model_lag9 <- lm(LVMH_weekly ~ CAC40_lag9, data = returns_weekly)
+summary(model_lag9)
+rmse_lag9 <- sqrt(mean(residuals(model_lag9)^2))
+
+model_lag10 <- lm(LVMH_weekly ~ CAC40_lag10, data = returns_weekly)
+summary(model_lag10)
+rmse_lag10 <- sqrt(mean(residuals(model_lag10)^2))
+
+model_lag11 <- lm(LVMH_weekly ~ CAC40_lag11, data = returns_weekly)
+summary(model_lag11)
+rmse_lag11 <- sqrt(mean(residuals(model_lag11)^2))
+
+model_lag12 <- lm(LVMH_weekly ~ CAC40_lag12, data = returns_weekly)
+summary(model_lag12)
+rmse_lag12 <- sqrt(mean(residuals(model_lag12)^2))
+
+model_lag13 <- lm(LVMH_weekly ~ CAC40_lag13, data = returns_weekly)
+summary(model_lag13)
+rmse_lag13 <- sqrt(mean(residuals(model_lag13)^2))
+
+model_lag14 <- lm(LVMH_weekly ~ CAC40_lag14, data = returns_weekly)
+summary(model_lag14)
+rmse_lag14 <- sqrt(mean(residuals(model_lag14)^2))
+
+model_lag15 <- lm(LVMH_weekly ~ CAC40_lag15, data = returns_weekly)
+summary(model_lag15)
+rmse_lag15 <- sqrt(mean(residuals(model_lag15)^2))
+
+model_lag16 <- lm(LVMH_weekly ~ CAC40_lag16, data = returns_weekly)
+summary(model_lag16)
+rmse_lag16 <- sqrt(mean(residuals(model_lag16)^2))
+
+model_lag17 <- lm(LVMH_weekly ~ CAC40_lag17, data = returns_weekly)
+summary(model_lag17)
+rmse_lag17 <- sqrt(mean(residuals(model_lag17)^2))
+
+model_lag18 <- lm(LVMH_weekly ~ CAC40_lag18, data = returns_weekly)
+summary(model_lag18)
+rmse_lag18 <- sqrt(mean(residuals(model_lag18)^2))
+
+model_lag19 <- lm(LVMH_weekly ~ CAC40_lag19, data = returns_weekly)
+summary(model_lag19)
+rmse_lag19 <- sqrt(mean(residuals(model_lag19)^2))
+
+model_lag20 <- lm(LVMH_weekly ~ CAC40_lag20, data = returns_weekly)
+summary(model_lag20)
+rmse_lag20 <- sqrt(mean(residuals(model_lag20)^2))
+
+model_lag21 <- lm(LVMH_weekly ~ CAC40_lag21, data = returns_weekly)
+summary(model_lag21)
+rmse_lag21 <- sqrt(mean(residuals(model_lag21)^2))
+
+model_lag22 <- lm(LVMH_weekly ~ CAC40_lag22, data = returns_weekly)
+summary(model_lag22)
+rmse_lag22 <- sqrt(mean(residuals(model_lag22)^2))
+
+model_lag23 <- lm(LVMH_weekly ~ CAC40_lag23, data = returns_weekly)
+summary(model_lag23)
+rmse_lag23 <- sqrt(mean(residuals(model_lag23)^2))
+
+model_lag24 <- lm(LVMH_weekly ~ CAC40_lag24, data = returns_weekly)
+summary(model_lag24)
+rmse_lag24 <- sqrt(mean(residuals(model_lag24)^2))
+
+model_lag25 <- lm(LVMH_weekly ~ CAC40_lag25, data = returns_weekly)
+summary(model_lag25)
+rmse_lag25 <- sqrt(mean(residuals(model_lag25)^2))
+
+model_lag26 <- lm(LVMH_weekly ~ CAC40_lag26, data = returns_weekly)
+summary(model_lag26)
+rmse_lag26 <- sqrt(mean(residuals(model_lag26)^2))
+
+model_lag27 <- lm(LVMH_weekly ~ CAC40_lag27, data = returns_weekly)
+summary(model_lag27)
+rmse_lag27 <- sqrt(mean(residuals(model_lag27)^2))
+
+model_lag28 <- lm(LVMH_weekly ~ CAC40_lag28, data = returns_weekly)
+summary(model_lag28)
+rmse_lag28 <- sqrt(mean(residuals(model_lag28)^2))
+
+model_lag29 <- lm(LVMH_weekly ~ CAC40_lag29, data = returns_weekly)
+summary(model_lag29)
+rmse_lag29 <- sqrt(mean(residuals(model_lag29)^2))
+
+model_lag30 <- lm(LVMH_weekly ~ CAC40_lag30, data = returns_weekly)
+summary(model_lag30)
+rmse_lag30 <- sqrt(mean(residuals(model_lag30)^2))
+
+model_lag31 <- lm(LVMH_weekly ~ CAC40_lag31, data = returns_weekly)
+summary(model_lag31)
+rmse_lag31 <- sqrt(mean(residuals(model_lag31)^2))
+
+model_lag32 <- lm(LVMH_weekly ~ CAC40_lag32, data = returns_weekly)
+summary(model_lag32)
+rmse_lag32 <- sqrt(mean(residuals(model_lag32)^2))
+
+model_lag33 <- lm(LVMH_weekly ~ CAC40_lag33, data = returns_weekly)
+summary(model_lag33)
+rmse_lag33 <- sqrt(mean(residuals(model_lag33)^2))
+
+model_lag34 <- lm(LVMH_weekly ~ CAC40_lag34, data = returns_weekly)
+summary(model_lag34)
+rmse_lag34 <- sqrt(mean(residuals(model_lag34)^2))
+
+model_lag35 <- lm(LVMH_weekly ~ CAC40_lag35, data = returns_weekly)
+summary(model_lag35)
+rmse_lag35 <- sqrt(mean(residuals(model_lag35)^2))
+
+model_lag36 <- lm(LVMH_weekly ~ CAC40_lag36, data = returns_weekly)
+summary(model_lag36)
+rmse_lag36 <- sqrt(mean(residuals(model_lag36)^2))
+
+model_lag37 <- lm(LVMH_weekly ~ CAC40_lag37, data = returns_weekly)
+summary(model_lag37)
+rmse_lag37 <- sqrt(mean(residuals(model_lag37)^2))
+
+model_lag38 <- lm(LVMH_weekly ~ CAC40_lag38, data = returns_weekly)
+summary(model_lag38)
+rmse_lag38 <- sqrt(mean(residuals(model_lag38)^2))
+
+model_lag39 <- lm(LVMH_weekly ~ CAC40_lag39, data = returns_weekly)
+summary(model_lag39)
+rmse_lag39 <- sqrt(mean(residuals(model_lag39)^2))
+
+model_lag40 <- lm(LVMH_weekly ~ CAC40_lag40, data = returns_weekly)
+summary(model_lag40)
+rmse_lag40 <- sqrt(mean(residuals(model_lag40)^2))
+
+model_lag41 <- lm(LVMH_weekly ~ CAC40_lag41, data = returns_weekly)
+summary(model_lag41)
+rmse_lag41 <- sqrt(mean(residuals(model_lag41)^2))
+
+model_lag42 <- lm(LVMH_weekly ~ CAC40_lag42, data = returns_weekly)
+summary(model_lag42)
+rmse_lag42 <- sqrt(mean(residuals(model_lag42)^2))
+
+model_lag43 <- lm(LVMH_weekly ~ CAC40_lag43, data = returns_weekly)
+summary(model_lag43)
+rmse_lag43 <- sqrt(mean(residuals(model_lag43)^2))
+
+model_lag44 <- lm(LVMH_weekly ~ CAC40_lag44, data = returns_weekly)
+summary(model_lag44)
+rmse_lag44 <- sqrt(mean(residuals(model_lag44)^2))
+
+model_lag45 <- lm(LVMH_weekly ~ CAC40_lag45, data = returns_weekly)
+summary(model_lag45)
+rmse_lag45 <- sqrt(mean(residuals(model_lag45)^2))
+
+model_lag46 <- lm(LVMH_weekly ~ CAC40_lag46, data = returns_weekly)
+summary(model_lag46)
+rmse_lag46 <- sqrt(mean(residuals(model_lag46)^2))
+
+model_lag47 <- lm(LVMH_weekly ~ CAC40_lag47, data = returns_weekly)
+summary(model_lag47)
+rmse_lag47 <- sqrt(mean(residuals(model_lag47)^2))
+
+model_lag48 <- lm(LVMH_weekly ~ CAC40_lag48, data = returns_weekly)
+summary(model_lag48)
+rmse_lag48 <- sqrt(mean(residuals(model_lag48)^2))
+
+model_lag49 <- lm(LVMH_weekly ~ CAC40_lag49, data = returns_weekly)
+summary(model_lag49)
+rmse_lag49 <- sqrt(mean(residuals(model_lag49)^2))
+
+model_lag50 <- lm(LVMH_weekly ~ CAC40_lag50, data = returns_weekly)
+summary(model_lag50)
+rmse_lag50 <- sqrt(mean(residuals(model_lag50)^2))
+
+rmse_table <- data.frame(
+  lag  = 1:50,
+  RMSE = c(
+    rmse_lag1,
+    rmse_lag2,
+    rmse_lag3,
+    rmse_lag4,
+    rmse_lag5,
+    rmse_lag6,
+    rmse_lag7,
+    rmse_lag8,
+    rmse_lag9,
+    rmse_lag10,
+    rmse_lag11,
+    rmse_lag12,
+    rmse_lag13,
+    rmse_lag14,
+    rmse_lag15,
+    rmse_lag16,
+    rmse_lag17,
+    rmse_lag18,
+    rmse_lag19,
+    rmse_lag20,
+    rmse_lag21,
+    rmse_lag22,
+    rmse_lag23,
+    rmse_lag24,
+    rmse_lag25,
+    rmse_lag26,
+    rmse_lag27,
+    rmse_lag28,
+    rmse_lag29,
+    rmse_lag30,
+    rmse_lag31,
+    rmse_lag32,
+    rmse_lag33,
+    rmse_lag34,
+    rmse_lag35,
+    rmse_lag36,
+    rmse_lag37,
+    rmse_lag38,
+    rmse_lag39,
+    rmse_lag40,
+    rmse_lag41,
+    rmse_lag42,
+    rmse_lag43,
+    rmse_lag44,
+    rmse_lag45,
+    rmse_lag46,
+    rmse_lag47,
+    rmse_lag48,
+    rmse_lag49,
+    rmse_lag50
+  )
+)
+
+rmse_table
+
+ggplot(rmse_table, aes(x = lag, y = RMSE)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  labs(
+    title = "LVMH – RMSE du modèle CAPM en fonction du lag du CAC40 (1 à 50 semaines)",
+    x     = "Lag k du CAC40 (r_{CAC40, t-k})",
+    y     = "RMSE in-sample"
+  ) +
+  theme_minimal()
+
+
+
+returns_weekly <- returns_weekly %>%
+  arrange(date)
+
+Kmax <- 50
+rmse_vec <- numeric(Kmax)
+
+for (k in 1:Kmax) {
+  
+  lag_name <- paste0("CAC40_lag", k)
+  returns_weekly[[lag_name]] <- dplyr::lag(returns_weekly$CAC40_weekly, k)
+  
+  fml <- as.formula(paste("LVMH_weekly ~", lag_name))
+  
+  model_k <- lm(fml, data = returns_weekly, na.action = na.omit)
+  
+  rmse_vec[k] <- sqrt(mean(residuals(model_k)^2))
+}
+
+rmse_table <- data.frame(
+  lag  = 1:Kmax,
+  RMSE = rmse_vec
+)
+
+print(rmse_table)
+
+ggplot(rmse_table, aes(x = lag, y = RMSE)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  labs(
+    title = "LVMH – RMSE du modèle CAPM en fonction du lag du CAC40",
+    x     = "Lag k du CAC40 (rendement CAC40_{t-k})",
+    y     = "RMSE in-sample"
+  ) +
+  theme_minimal()
