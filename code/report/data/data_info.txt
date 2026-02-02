@@ -1,0 +1,18 @@
+SOURCE DES DONNÉES : Yahoo Finance via l'API quantmod de R
+
+PÉRIODE : 2 janvier 2019 - 30 décembre 2024
+FORMAT : Prix ajustés de clôture (incluant dividendes)
+
+ACTIFS :
+- LVMH (MC.PA) - Secteur du luxe
+- TotalEnergies (TTE.PA) - Secteur énergétique
+- BNP Paribas (BNP.PA) - Secteur bancaire
+- CAC 40 (^FCHI) - Indice de marché
+
+REMARQUE :
+Les données sont téléchargées dynamiquement par le script R.
+Aucun fichier de données n'est stocké dans ce dépôt pour respecter les conditions d'utilisation.
+
+Pour reproduire l'analyse :
+1. Exécutez le script 'code/run_analysis.R'
+2. Les données seront téléchargées automatiquement
