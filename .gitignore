@@ -47,3 +47,11 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Outputs générés (pas besoin de versionner)
+outputs/figures/*
+outputs/tables/*
+# Fichiers temporaires R
+.Rhistory
+.RData
+.Rproj.user/
